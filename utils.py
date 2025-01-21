@@ -1,23 +1,7 @@
-from typing import List
-from fastapi import FastAPI, status
-from pydantic import BaseModel
 import torch
-import os
+import librosa
+import matplotlib.pyplot as plt
 
-
-def load_model(model_dir: str):
-    """Load the model from the model_dir.
-    Args:
-        model_dir (str): path to the directory containing model.pth
-        
-    Returns:
-        torch.jit.ScriptModule
-    """
-    model_path = os.path.join(model_dir, 'model.pth')
-    model = torch.jit.load(model_path)
-    # if torch.cuda.is_available():
-    #     model.to('cuda') 
-    return model
 
 def file_to_batch(wav, clip_length=32640):
     """Convert the input audio file to a batch of audio tensors.
@@ -39,7 +23,6 @@ def file_to_batch(wav, clip_length=32640):
     return wav_batch
 
 def batch_stft(data, sr=8000, hop_len_s=.016, win_s=.064):
-    #out dim (B, 1, f_bins, h_bins,2)
     """Transforms batched audio to STFT coefficients
 
     Args:
@@ -56,7 +39,6 @@ def batch_stft(data, sr=8000, hop_len_s=.016, win_s=.064):
 
     data = data.squeeze(1)
     
-    #return_complex provides extra dim that contains real vals corresponding to real and im parts
     stft_coefs = torch.stft(data
                           ,n_fft=wl_sam
                           ,window=torch.hann_window(wl_sam)
@@ -64,38 +46,8 @@ def batch_stft(data, sr=8000, hop_len_s=.016, win_s=.064):
                           ,normalized=True
                           ,return_complex=True)
     stft_coefs = torch.view_as_real(stft_coefs)
-    
     return stft_coefs.unsqueeze(1)
 
-def preprocess(input_audio):
-    """Preprocess the input audio.
-
-    Args:
-        input_audio (_type_): Open
-
-    Returns:
-        torch.tensor: audio tensor of shape (Batch, 1, frequency bins, time frames, 2)
-    """
-    audio_tensor = torch.tensor(input_audio) #convert input audio to audio tensor
-    batch = file_to_batch(audio_tensor)
-    batch_stft = batch_stft(batch)
-    return batch_stft
-
-def predict(model, input: torch.tensor):
-    """Predict the output using the model and input.
-
-    Args:
-        model (torch.jit.ScriptModule): traced model
-        input (torch.tensor): audio tensor of shape (Batch(variable), 1, 257, 256, 2)
-
-    Returns:
-        torch.tensor: torch.tensor of shape (Batch, 1, frequency bins, time frames)
-    """
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = model.to(device)
-    input = input.to(device)
-    output = model(input)
-    return output
 
 def batch_istft(data, sr=8000, hop_len_s=.016, win_s=.064):
     """Converts batched audio from STFT coefficients to audio
@@ -133,23 +85,17 @@ def batch_to_file(batch):
     wav = batch.reshape(1,-1)
     return wav
 
-def postprocess():
-    pass
-
-def load_payload():
-    pass
-
-app = FastAPI()
-
-class Payload(BaseModel):
-    input: List[float] #what is this?
-
-#required healthcheck  
-@app.get('/ping')
-def ping():
-    return "pong"
-
-#to invoke the model, need to send data to /invocations
-@app.post('/invocations')
-def invoke():
-    pass
+#code from labs
+def spec_plot(audio, sr=8000, n_fft=512, hop_length=128, save_png=False, png_name='test.png'):
+    X = librosa.stft(audio, n_fft=n_fft, hop_length=hop_length)
+    S = librosa.amplitude_to_db(abs(X)) 
+    
+    plt.figure(figsize=(10, 3))
+    librosa.display.specshow(S, sr=sr, hop_length=hop_length, x_axis='time', y_axis='linear', cmap='jet')
+    plt.colorbar(format='%+2.0f dB')
+    
+    if save_png:
+        plt.savefig(png_name)
+        
+    plt.show()
+    
