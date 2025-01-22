@@ -110,21 +110,71 @@ def batch_to_file(batch: torch.Tensor) -> torch.Tensor:
     wav = batch.reshape(1,-1)
     return wav
 
-def normalize_loudness(audio: torch.Tensor, reference: torch.Tensor) -> dict:
+
+def normalize_loudness(audio: torch.Tensor, 
+                       reference: torch.Tensor,
+                       sample_rate: int = 8000,
+                       n_fft: int = 512,
+                       hop_length: int = 128,
+                       max_magnitude: bool = True) -> torch.Tensor:
     """Normalize the audio tensor
 
     Args:
         audio (torch.Tensor): audio tensor to be normalized of shape (1, file length in samples)
-        reference_audio (torch.Tensor): reference audio tensor of shape (1, file length in samples)
+        referenc (torch.Tensor): reference audio tensor of shape (1, file length in samples)
+        sample_rate (int, optional): sample rate. Defaults to 8000.
+        n_fft (int, optional): number of fft bins. Defaults to 512.
+        hop_length (int, optional): hop length. Defaults to 128.
+        max_magnitude (bool, optional): Caps strenght of normalized audio coefs at the max magnitude in reference
 
     Returns:
-        dict: normalized audio tensor and spectorgrams of 
+        torch.tensor: normalized audio tensor
     """
-    #want: 
-        # perceptual equivalent loudness to reference
-        # no clipping
-    #find an array of real numbers to multiply spectorgrams by s.t.
-    return {'audio'}
+    audio_stft = torch.stft(audio, n_fft=n_fft, hop_length=hop_length, return_complex=True)
+    reference_stft = torch.stft(reference, n_fft=n_fft, hop_length=hop_length, return_complex=True)
+    
+    audio_mag = torch.abs(audio_stft)
+    reference_mag = torch.abs(reference_stft)
+    
+    audio_power = torch.abs(audio_stft)**2
+    reference_power = torch.abs(reference_stft)**2
+    
+    audio_db = 10 * torch.log10(torch.max(audio_power,1e-10))
+    reference_db = 10 * torch.log10(torch.max(reference_power,1e-10))
+    
+    #need to calc offset
+    
+    #librosa
+    #offset = convert.frequency_weighting(frequencies, kind=kind).reshape((-1, 1))
+    #result: np.ndarray = offset + power_to_db(S, **kwargs)
+    
+    # Chat GPT way
+    freqs = librosa.fft_frequencies(sr=sample_rate, n_fft=n_fft)
+    a_weighting = librosa.A_weighting(freqs)
+    
+    a_weighting = torch.tensor(a_weighting, device=audio.device, dtype=audio_mag.dtype)
+    
+    audio_weighted = audio_mag * a_weighting[:, None]
+    reference_weighted = reference_mag * a_weighting[:, None]
+    
+    # Compute perceptual loudness for each frame
+    audio_loudness = audio_weighted.sum(dim=0)  # Sum across frequency bins
+    reference_loudness = reference_weighted.sum(dim=0)
+
+    # Optimize scaling factor c
+    c = (reference_loudness / audio_loudness).mean().item()  # Simplified scalar scaling
+
+    # Ensure no clipping by limiting the maximum magnitude
+    if max_magnitude:
+        max_audio_mag = (c * audio_mag).max()
+        max_reference_mag = reference_mag.max()
+        if max_audio_mag > max_reference_mag:
+            c = c * (max_reference_mag / max_audio_mag)
+
+    # Scale the input STFT
+    normalized_audio_stft = c * audio_stft
+    normalized_audio = torch.istft(normalized_audio_stft, n_fft=n_fft, hop_length=hop_length)
+    return normalized_audio
 
 # Pending
 def spec_plot(audio, sr=8000, n_fft=512, hop_length=128, save_png=False, png_name='test.png'):
