@@ -55,7 +55,7 @@ def batch_stft(data: torch.Tensor,
         win_s (float, optional): window size in seconds. Defaults to .064.
 
     Returns:
-        torch.Tensor: audio tensor of shape (Batch, 1, frequency bins, time frames, 2)
+        torch.Tensor: audio tensor of shape (Batch, 1, frequency bins, time frames)
     """
     hl_sam = int(round(hop_len_s*sr))
     wl_sam = int(round(win_s*sr))
@@ -68,7 +68,6 @@ def batch_stft(data: torch.Tensor,
                           ,hop_length=hl_sam
                           ,normalized=True
                           ,return_complex=True)
-    stft_coefs = torch.view_as_real(stft_coefs)
     return stft_coefs.unsqueeze(1)
 
 
@@ -111,6 +110,21 @@ def batch_to_file(batch: torch.Tensor) -> torch.Tensor:
     wav = batch.reshape(1,-1)
     return wav
 
+def normalize_loudness(audio: torch.Tensor, reference: torch.Tensor) -> dict:
+    """Normalize the audio tensor
+
+    Args:
+        audio (torch.Tensor): audio tensor to be normalized of shape (1, file length in samples)
+        reference_audio (torch.Tensor): reference audio tensor of shape (1, file length in samples)
+
+    Returns:
+        dict: normalized audio tensor and spectorgrams of 
+    """
+    #want: 
+        # perceptual equivalent loudness to reference
+        # no clipping
+    #find an array of real numbers to multiply spectorgrams by s.t.
+    return {'audio'}
 
 # Pending
 def spec_plot(audio, sr=8000, n_fft=512, hop_length=128, save_png=False, png_name='test.png'):
@@ -127,5 +141,5 @@ def spec_plot(audio, sr=8000, n_fft=512, hop_length=128, save_png=False, png_nam
     plt.show()
 
 
-
-    
+if __name__ == "__main__":
+    pass
