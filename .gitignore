@@ -39,3 +39,7 @@ venv.bak/
 # Unit test / coverage reports
 test-files/
 test-storage/
+
+#scap and test files
+main_test.py
+junk.ipynb
