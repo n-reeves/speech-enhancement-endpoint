@@ -1,5 +1,5 @@
 from typing import List
-from fastapi import FastAPI, status
+from fastapi import FastAPI, status, Request
 from pydantic import BaseModel
 import torch
 import numpy as np
@@ -9,8 +9,13 @@ from utils import batch_stft, batch_istft, file_to_batch, batch_to_file, normali
 MODEL_PATH = "ml/model"
 MODEL_NAME = "model.pt"
 
+FILE_SAMPLE_RATE = 8000
+FILE_LENGTH_CAP_SECONDS = 30
+FILE_LENGTH_CAP_SAMPLES = int(FILE_SAMPLE_RATE * FILE_LENGTH_CAP_SECONDS + FILE_SAMPLE_RATE//2)
+
 class Payload(BaseModel):
     audio: List[List[float]]
+
 
 def load_model() -> torch.jit._script.RecursiveScriptModule:
     """Load the model from the model_dir.
@@ -23,8 +28,10 @@ def load_model() -> torch.jit._script.RecursiveScriptModule:
     model = torch.jit.load(os.path.join(MODEL_PATH, MODEL_NAME))
     return model
 
+
 def load_payload():
     pass
+
 
 def preprocess(input_audio: List[List[float]]) -> torch.Tensor:
     """Preprocess the input audio.
@@ -39,6 +46,7 @@ def preprocess(input_audio: List[List[float]]) -> torch.Tensor:
     stft_batch = batch_stft(audio_batch)
     return stft_batch
 
+
 def predict(model: torch.jit._script.RecursiveScriptModule, input: torch.Tensor) -> torch.Tensor:
     """Predict the output using the model and input.
 
@@ -49,21 +57,21 @@ def predict(model: torch.jit._script.RecursiveScriptModule, input: torch.Tensor)
     Returns:
         torch.Tensor: tensor of shape (Batch, 1, frequency bins, time frames)
     """
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = model.to(device)
-    input = torch.view_as_real(input).to(device) #(Batch, 1, 257, 256) -> (Batch, 1, 257, 256, 2)
+    input = torch.view_as_real(input) #(Batch, 1, 257, 256) -> (Batch, 1, 257, 256, 2)
     output = model(input)
     return output
 
-def postprocess(output: torch.Tensor, wav_input: torch.Tensor) -> dict:
+
+def postprocess(output: torch.Tensor, wav_input: torch.Tensor, normalize: bool = True) -> torch.Tensor:
     """Postprocess the output audio.
 
     Args:
         output (torch.Tensor): batched STFT coefs masked by model. shape (Batch, 1, frequency bins, time frames)
         input (torch.Tensor): audio segment that has been processed (1, clip_length)
+        normalize_audio (bool): whether to normalize the output audio to match the input audio loudness
 
     Returns:
-        dict: contains the output audio and input audio as numpy arrays
+        (torch.Tensor): audio tensor of shape (1, clip_length)
     """
     #output of model -> (1, B*segment_length)
     batch_output = batch_istft(output)
@@ -71,23 +79,17 @@ def postprocess(output: torch.Tensor, wav_input: torch.Tensor) -> dict:
     
     #put both input and output audio files on cpu if on gpu
     wav_output = wav_output.detach()
-    if wav_output.device != torch.device('cpu'):
-        wav_output = wav_output.cpu()
-    
-    if wav_input.device != torch.device('cpu'):
-        wav_input = wav_input.cpu()
     
     #crop model out to match input
     input_length = wav_input.shape[-1]
     wav_output = wav_output[:, :input_length]
     
     #normalize output loudness
-    wav_output = normalize_loudness(wav_output, wav_input)
+    if normalize:
+        wav_output = normalize_loudness(wav_output, wav_input)
     
-    #input and output audio files to numpy
-    wav_output = wav_output.numpy()
-    wav_input = wav_input.numpy()
-    return {'output_audio': wav_output, 'input_audio': wav_input}
+    return wav_output
+
 
 ### Decorators
 #Reference note: to run server with uvicorn, type in terminal: uvicorn main:app --reload
@@ -95,12 +97,18 @@ app = FastAPI()
 
 #required formatting to create endpoint healthcheck  
 @app.get('/ping')
-def ping():
+async def ping():
     return {"message": "pong"}
+
 
 #to invoke the model, need to send data to /invocations
 @app.post('/invocations')
-def invoke():
+def invoke(payload: Payload):
+    
+    #type validation
+    #file length validation
+    #server side check if aws budget is at 90%
+    #last thing is people spamming requests
     pass
 
 
@@ -114,13 +122,9 @@ def test_load_model():
 
 
 ##test recieve payload
-#from python
 @app.post('/test/recieve_payload')
 def test_recieve_payload(input_audio: Payload):
     return {'input': input_audio.audio}
-
-#from javascript (load payload)
-#pending
 
 
 ##test preprocess function
@@ -144,9 +148,13 @@ def test_predict(input_audio: Payload):
 ##test postprocess function
 @app.post('/test/postprocess')
 def test_postprocess(input_audio: Payload):
-    model = load_model()
-    input_tensor = torch.tensor(input_audio.audio)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = load_model().to(device)
+    input_tensor = torch.tensor(input_audio.audio).to(device)
     model_in = preprocess(input_tensor)
     output_tensor = predict(model, model_in)
-    wav_dict = postprocess(output_tensor, input_tensor)
-    return {"wav": wav_dict['output_audio'].tolist()}
+    out_audio = postprocess(output_tensor, input_tensor)  
+    
+    if out_audio.device != torch.device('cpu'):
+        out_audio = out_audio.cpu()
+    return {"wav": out_audio.tolist()}
