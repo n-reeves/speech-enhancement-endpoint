@@ -1,4 +1,6 @@
 import torch
+import torch.nn.functional as F
+
 import torchaudio
 import librosa
 import matplotlib.pyplot as plt
@@ -182,7 +184,7 @@ def normalize_loudness(audio: torch.Tensor,
     
     mag_reduction_ratios = reference_mag_norm/audio_mag_norm
     cap_scaling_factor = torch.where(mag_reduction_ratios > threshold, torch.ones_like(cap_scaling_factor), cap_scaling_factor)
-
+    
     cap_scaled_stft = audio_stft * cap_scaling_factor #(B, bins, frames)
     
     out_audio = torch.istft(cap_scaled_stft, 
@@ -268,10 +270,9 @@ if __name__ == "__main__":
     test_in = load_wav('./test-files/two-speech-low-drone_in.wav')
     test_out = load_wav('./test-files/two-speech-low-drone_out_old.wav')
     
-    outs = normalize_loudness(test_out, test_in)
-    # out_file = batch_to_file(batch_istft(outs['stft']))
+    out = normalize_loudness(test_out, test_in)
     
-    # write_wav('./test-files/zzz.wav', out_file)
+    write_wav('./test-files/zzz.wav', out)
 
     
     

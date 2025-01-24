@@ -104,13 +104,12 @@ async def ping():
 #to invoke the model, need to send data to /invocations
 @app.post('/invocations')
 def invoke(payload: Payload):
-    
-    #type validation
+    print(len(payload.audio))
     #file length validation
     #server side check if aws budget is at 90%
     #last thing is people spamming requests
-    pass
-
+    
+    return {'output_audio': payload.audio}
 
 ### Test decorators
 
