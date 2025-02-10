@@ -35,6 +35,17 @@ def write_wav(filepath: str, audio: torch.Tensor, sr: int = 8000) -> None:
     """
     torchaudio.save(uri=filepath, src=audio, sample_rate=sr)
 
+def stereo_to_mono(audio: torch.Tensor) -> torch.Tensor:
+    """Convert the stereo audio tensor to mono
+
+    Args:
+        audio (torch.Tensor): audio tensor of shape (2, file length in samples)
+
+    Returns:
+        torch.Tensor: audio tensor of shape (1, file length in samples)
+    """
+    return torch.mean(audio, dim=0, keepdim=True)
+
 
 def file_to_batch(wav: torch.Tensor, clip_length: int=32640) -> torch.Tensor:
     """Convert the input audio file to a batch of audio tensors.

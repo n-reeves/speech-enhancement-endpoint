@@ -4,13 +4,13 @@ from pydantic import BaseModel
 import torch
 import numpy as np
 import os
-from utils import batch_stft, batch_istft, file_to_batch, batch_to_file, normalize_loudness
+from utils import batch_stft, batch_istft, file_to_batch, batch_to_file, normalize_loudness, stereo_to_mono
 
 MODEL_PATH = "ml/model"
 MODEL_NAME = "model.pt"
 
 FILE_SAMPLE_RATE = 8000
-FILE_LENGTH_CAP_SECONDS = 30
+FILE_LENGTH_CAP_SECONDS = 31
 FILE_LENGTH_CAP_SAMPLES = int(FILE_SAMPLE_RATE * FILE_LENGTH_CAP_SECONDS + FILE_SAMPLE_RATE//2)
 
 class Payload(BaseModel):
@@ -29,11 +29,31 @@ def load_model() -> torch.jit._script.RecursiveScriptModule:
     return model
 
 
-def load_payload():
-    pass
+def check_payload(input_audio: List[List[float]]) -> str:
+    """Check basic properties of the input audio.
+
+    Args:
+        input_audio (List[List[float]]): input audio
+    """
+    #check number of channels
+    channels = len(input_audio)
+    if channels not in [1,2]:
+        return "Error: Audio file must have 1 or 2 channels. Input has {}".format(channels)
+    
+    #check length of first channel
+    c1_len = len(input_audio[0])
+    if c1_len > FILE_LENGTH_CAP_SAMPLES:
+        return "Error: Audio file is too long. Input samples are {0} but capped at {1}.".format(c1_len,FILE_LENGTH_CAP_SAMPLES)
+    
+    #check if channel lengths are equal
+    if channels == 2:
+        c2_len = len(input_audio[1])
+        if c1_len != c2_len:
+            return "Error: Channels must have same length. Channel 1 has length {0} but channel 2 has length {1}".format(c1_len, c2_len)
+    return ""
 
 
-def preprocess(input_audio: List[List[float]]) -> torch.Tensor:
+def preprocess(input_audio: torch.tensor) -> torch.Tensor:
     """Preprocess the input audio.
 
     Args:
@@ -42,6 +62,15 @@ def preprocess(input_audio: List[List[float]]) -> torch.Tensor:
     Returns:
         torch.Tensor: audio tensor of shape (Batch, 1, frequency bins, time frames)
     """
+    #convert to mono by taking the average of the two channels
+    if input_audio.shape[0] == 2:
+        input_audio = stereo_to_mono(input_audio)
+        
+    #add padding 
+    if input_audio.shape[1] < 512:
+        padding = torch.zeros(1, 512 - input_audio.shape[1])
+        input_audio = torch.cat([input_audio, padding], dim=1)
+    
     audio_batch = file_to_batch(input_audio)
     stft_batch = batch_stft(audio_batch)
     return stft_batch
@@ -104,12 +133,23 @@ async def ping():
 #to invoke the model, need to send data to /invocations
 @app.post('/invocations')
 def invoke(payload: Payload):
-    print(len(payload.audio))
-    #file length validation
-    #server side check if aws budget is at 90%
-    #last thing is people spamming requests
+    input_audio_raw = payload.audio
     
-    return {'output_audio': payload.audio}
+    error = check_payload(input_audio_raw)
+    if len(error) > 0:
+        return {"error": error}
+    
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = load_model().to(device)
+    input_tensor = torch.tensor(input_audio_raw).to(device)
+    model_input = preprocess(input_tensor)
+    output_tensor = predict(model, model_input)
+    output_audio = postprocess(output_tensor, input_tensor)  
+    
+    if output_audio.device != torch.device('cpu'):
+        output_audio = output_audio.cpu()
+    return {"output_audio": output_audio.tolist()}
+
 
 ### Test decorators
 
@@ -148,6 +188,7 @@ def test_predict(input_audio: Payload):
 @app.post('/test/postprocess')
 def test_postprocess(input_audio: Payload):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    input_tensor = torch.tensor(input_audio.audio).to(device)
     model = load_model().to(device)
     input_tensor = torch.tensor(input_audio.audio).to(device)
     model_in = preprocess(input_tensor)
